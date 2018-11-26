@@ -3,41 +3,52 @@ namespace Raygun4php
 {
     class RaygunRequestMessage
     {
-        public $hostName;
-        public $url;
-        public $httpMethod;
-        public $ipAddress;
-        //
-        public $queryString;
-        public $headers;
-        public $data;
-        public $form;
-        public $rawData;
+        public $HostName;
+        public $Url;
+        public $HttpMethod;
+        public $IpAddress;
+        public $QueryString;
+        public $Headers;
+        public $Data;
+        public $Form;
+        public $RawData;
 
         public function __construct()
         {
             if (php_sapi_name() !== 'cli') {
-                $this->hostName = $_SERVER['HTTP_HOST'];
-                $this->httpMethod = $_SERVER['REQUEST_METHOD'];
-                $this->url = $_SERVER['REQUEST_URI'];
-                $this->ipAddress = $_SERVER['REMOTE_ADDR'];
+                $this->HostName = (isset($_SERVER['HTTP_HOST'])) ? $_SERVER['HTTP_HOST'] : null;
+                $this->HttpMethod = (isset($_SERVER['REQUEST_METHOD'])) ? $_SERVER['REQUEST_METHOD'] : null;
+                $this->Url = (isset($_SERVER['REQUEST_URI'])) ? $_SERVER['REQUEST_URI'] :  null;
+                $this->IpAddress = $this->getRemoteAddr();
 
-                parse_str($_SERVER['QUERY_STRING'], $this->queryString);
-                if (empty($this->queryString))
+                if (array_key_exists('QUERY_STRING', $_SERVER))
                 {
-                    $this->queryString = null;
+                  parse_str($_SERVER['QUERY_STRING'], $this->QueryString);
+
+                  if (empty($this->QueryString))
+                  {
+                      $this->QueryString = null;
+                  }
                 }
             }
 
-            $this->headers = $this->emu_getAllHeaders();
-            $this->data = $_SERVER;
+            $this->Headers = $this->emu_getAllHeaders();
 
             $utf8_convert = function($value) use (&$utf8_convert) {
                 return is_array($value) ?
                 array_map($utf8_convert, $value) :
                 iconv('UTF-8', 'UTF-8//IGNORE', $value);
             };
-            $this->form = array_map($utf8_convert, $_POST);
+
+            $utf8_convert_server = function($value) use (&$utf8_convert_server) {
+                return is_array($value) ?
+                array_map($utf8_convert_server, $value) :
+                iconv('UTF-8', 'UTF-8', utf8_encode($value));
+            };
+
+            $this->Form = array_map($utf8_convert, $_POST);
+
+            $this->Data = array_map($utf8_convert_server, $_SERVER);
 
             if (php_sapi_name() !== 'cli')
             {
@@ -64,7 +75,7 @@ namespace Raygun4php
                     $raw = substr($raw, 0, 4095);
                   }
 
-                  $this->rawData = iconv('UTF-8', 'UTF-8//IGNORE', $raw);
+                  $this->RawData = iconv('UTF-8', 'UTF-8//IGNORE', $raw);
                 }
             }
         }
@@ -73,7 +84,7 @@ namespace Raygun4php
         {
             if (!function_exists('getallheaders'))
             {
-                $headers = '';
+                $headers = array();
                 foreach ($_SERVER as $name => $value)
                 {
                     if (substr($name, 0, 5) == 'HTTP_')
@@ -87,6 +98,22 @@ namespace Raygun4php
             {
                 return getallheaders();
             }
+        }
+
+        private function getRemoteAddr()
+        {
+            $ip = null;
+
+            if (!empty($_SERVER['HTTP_X_FORWARDED_FOR']))
+            {
+              $ip = $_SERVER['HTTP_X_FORWARDED_FOR'];
+            }
+            else if (!empty($_SERVER['REMOTE_ADDR']))
+            {
+              $ip = $_SERVER['REMOTE_ADDR'];
+            }
+
+            return $ip;
         }
     }
 }

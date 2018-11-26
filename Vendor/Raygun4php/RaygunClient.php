@@ -5,7 +5,7 @@ namespace Raygun4php {
   require_once realpath(__DIR__ . '/Raygun4PhpException.php');
   require_once realpath(__DIR__ . '/Uuid.php');
 
-  use Rhumsaa\Uuid\Uuid;
+  use Raygun4Php\Rhumsaa\Uuid\Uuid;
 
   class RaygunClient
   {
@@ -13,24 +13,59 @@ namespace Raygun4php {
     protected $version;
     protected $tags;
     protected $user;
+    protected $firstName;
+    protected $fullName;
+    protected $email;
+    protected $isAnonymous;
+    protected $uuid;
     protected $httpData;
     protected $useAsyncSending;
-    protected $debugSending;
+    protected $debug;
+    protected $disableUserTracking;
+    protected $proxy;
+
+    protected $groupingKeyCallback;
+
+    protected $cookieOptions = array(
+      'use'      => true,
+      'expire'   => 2592000, // 30 * 24 * 60 * 60
+      'path'     => '/',
+      'domain'   => '',
+      'secure'   => false,
+      'httponly' => false
+    );
+
+    /**
+     * @var Array Parameter names to filter out of logged form data. Case insensitive.
+     * Accepts regular expressions when the name starts with a forward slash.
+     * Maps either to TRUE, or to a callable with $key and $value arguments.
+     */
+    protected $filterParams = array();
+
+    private $host = 'api.raygun.io';
+    private $path = '/entries';
+    private $transport = 'ssl';
+    private $port = 443;
 
     /*
     * Creates a new RaygunClient instance.
     * @param bool $useAsyncSending If true, attempts to post rapidly and asynchronously the script by forking a cURL process.
     * RaygunClient cannot return the HTTP result when in async mode, however. If false, sends using a blocking socket connection.
     * This is the only method available on Windows.
-    * @param bool $debugSending If true, and $useAsyncSending is true, this will output the HTTP response code from posting
+    * @param bool $debug If true, and $useAsyncSending is true, this will output the HTTP response code from posting. Will also emit errors if the socket connection fails to send through errors.
     * error messages. See the GitHub documentation for code meaning. This param does nothing if useAsyncSending is set to true.
     */
-    public function __construct($key, $useAsyncSending = true, $debugSending = false)
+    public function __construct($key, $useAsyncSending = true, $debug = false, $disableUserTracking = false)
     {
       $this->apiKey = $key;
       $this->useAsyncSending = $useAsyncSending;
-      $this->debugSending = $debugSending;
-      $this->SetUser();
+      $this->debug = $debug;
+
+      if (!$disableUserTracking) {
+        $this->SetUser();
+      }
+
+      $this->disableUserTracking = $disableUserTracking;
     }
 
     /*
@@ -59,6 +94,8 @@ namespace Raygun4php {
         $this->AddUserCustomData($message, $userCustomData);
       }
 
+      $this->AddGroupingKey($message);
+
       return $this->Send($message);
     }
 
@@ -85,12 +122,14 @@ namespace Raygun4php {
         $this->AddUserCustomData($message, $userCustomData);
       }
 
+      $this->AddGroupingKey($message);
+
       return $this->Send($message);
     }
 
     /*
      * Sets the version number of your project that will be transmitted
-     * to Raygun.io.
+     * to Raygun.com.
      * @param string $version The version number in the form of x.x.x.x,
      * where x is a positive integer.
      *
@@ -109,16 +148,23 @@ namespace Raygun4php {
     *  of the calling application.
     *
     */
-    public function SetUser($user = null)
+    public function SetUser($user = null, $firstName = null, $fullName = null, $email = null, $isAnonymous = null, $uuid = null)
     {
+      $this->firstName = $this->StoreOrRetrieveUserCookie('rgfirstname', $firstName);
+      $this->fullName = $this->StoreOrRetrieveUserCookie('rgfullname', $fullName);
+      $this->email = $this->StoreOrRetrieveUserCookie('rgemail', $email);
+
+      $this->uuid = $this->StoreOrRetrieveUserCookie('rguuidvalue', $uuid);
+      $this->isAnonymous = $this->StoreOrRetrieveUserCookie('rgisanonymous', $isAnonymous ? 'true' : 'false') == 'true' ? true : false;
+
       if (is_string($user))
       {
         $this->user = $user;
 
         if (php_sapi_name() != 'cli' && !headers_sent())
         {
-          setcookie('rguserid', $user, time() + 60 * 60 * 24 * 30);
-          setcookie('rguuid', 'false', time() + 60 * 60 * 24 * 30);
+          $this->setCookie('rguserid', $user);
+          $this->setCookie('rguuid', 'false');
         }
       }
       else
@@ -129,14 +175,68 @@ namespace Raygun4php {
 
           if (php_sapi_name() != 'cli' && !headers_sent())
           {
-            setcookie('rguserid', $this->user, time() + 60 * 60 * 24 * 30);
-            setcookie('rguuid', 'true', time() + 60 * 60 * 24 * 30);
+            $this->setCookie('rguserid', $this->user);
+            $this->setCookie('rguuid', 'true');
           }
         }
-        else
+        else if (array_key_exists('rguserid', $_COOKIE))
         {
           $this->user = $_COOKIE['rguserid'];
         }
+
+        $this->isAnonymous = $this->StoreOrRetrieveUserCookie('rgisanonymous', 'true') == 'true';
+      }
+    }
+
+    /*
+    * Sets a callback to control how error instances are grouped together. The callback
+    * is provided with the payload and stack trace of the error upon execution. If the
+    * callback returns a string then error instances with a matching key will grouped together.
+    * If the callback doesn't return a value, or the value is not a string, then automatic
+    * grouping will be used.
+    * @param function $callback
+    *
+    */
+    public function SetGroupingKey($callback) {
+      $this->groupingKeyCallback = $callback;
+    }
+
+    private function StoreOrRetrieveUserCookie($key, $value)
+    {
+      if (is_string($value))
+      {
+        if (php_sapi_name() != 'cli' && !headers_sent())
+        {
+          $this->setCookie($key, $value);
+        }
+
+        return $value;
+      }
+      else
+      {
+        if (array_key_exists($key, $_COOKIE))
+        {
+          if ($_COOKIE[$key] != $value && php_sapi_name() != 'cli' && !headers_sent())
+          {
+            $this->setCookie($key, $value);
+          }
+          return $_COOKIE[$key];
+        }
+      }
+
+      return null;
+    }
+
+    /**
+     * @param string $name
+     * @param string $value
+     */
+    protected function setCookie($name, $value)
+    {
+      $options = $this->cookieOptions;
+
+      if ($options['use'] === true) {
+        setcookie($name, $value, time() + $options['expire'], $options['path'], $options['domain'], $options['secure'], $options['httponly']);
       }
     }
 
@@ -155,9 +255,9 @@ namespace Raygun4php {
 
       if ($this->user != null)
       {
-        $message->Details->User = new RaygunIdentifier($this->user);
+        $message->Details->User = new RaygunIdentifier($this->user, $this->firstName, $this->fullName, $this->email, $this->isAnonymous, $this->uuid);
       }
-      else
+      else if (!$this->disableUserTracking)
       {
         $message->Details->User = new RaygunIdentifier($_COOKIE['rguserid']);
       }
@@ -189,6 +289,16 @@ namespace Raygun4php {
       }
     }
 
+    private function AddGroupingKey(&$message) {
+      if( is_callable( $this->groupingKeyCallback ) ) {
+        $groupingKey = call_user_func( $this->groupingKeyCallback, $message, $message->Details->Error->StackTrace );
+
+        if( is_string( $groupingKey ) ) {
+          $message->Details->GroupingKey = $groupingKey;
+        }
+      }
+    }
+
     private function is_assoc($array)
     {
       return (bool)count(array_filter(array_keys($array), 'is_string'));
@@ -210,49 +320,65 @@ namespace Raygun4php {
         throw new \Raygun4php\Raygun4PhpException("API not valid, cannot send message to Raygun");
       }
 
-      return $this->post(json_encode($message), realpath(__DIR__ . '/cacert.crt'));
+      $message = $this->filterParamsFromMessage($message);
+      $message = $this->toJsonRemoveUnicodeSequences($message);
+      $message = $this->removeNullBytes($message);
+
+      if(strlen($message) <= 0) {
+        return null;
+      }
+
+      return $this->post($message, realpath(__DIR__ . '/cacert.crt'));
     }
 
     private function post($data_to_send, $cert_path)
     {
-      $headers = 0;
-      $host = 'api.raygun.io';
-      $path = '/entries';
-      $transport = 'ssl';
-      $port = 443;
-      $remote = $transport . '://' . $host . ':' . $port;
-
-      $context = stream_context_create();
-      $result = stream_context_set_option($context, 'ssl', 'verify_host', true);
-
-      if (!empty($cert_path))
-      {
-        $result = stream_context_set_option($context, 'ssl', 'cafile', $cert_path);
-        $result = stream_context_set_option($context, 'ssl', 'verify_peer', true);
-      }
-      else
-      {
-        $result = stream_context_set_option($context, 'ssl', 'allow_self_signed', true);
-      }
 
       if ($this->useAsyncSending && strtoupper(substr(PHP_OS, 0, 3)) !== 'WIN')
       {
-        $cmd = "curl -X POST -H 'Content-Type: application/json' -H 'X-ApiKey: " . $this->apiKey . "'";
-        $cmd .= " -d '" . $data_to_send . "' --cacert '" . realpath(__DIR__ . '/cacert.crt')
-           . "' 'https://api.raygun.io:443/entries' > /dev/null 2>&1 &";
-
+        $curlOpts = array(
+          "-X POST",
+          "-H 'Content-Type: application/json'",
+          "-H 'X-ApiKey: " . $this->apiKey . "'",
+          "-d " . escapeshellarg($data_to_send),
+          "--cacert '" . realpath(__DIR__ . '/cacert.crt') . "'"
+        );
+        if ($this->proxy) {
+          $curlOpts[] = "--proxy '" . $this->proxy . "'";
+        }
+        $cmd = "curl " . implode(' ', $curlOpts) . " 'https://api.raygun.io:443/entries' > /dev/null 2>&1 &";
+        $output = array();
+        $exit;
         exec($cmd, $output, $exit);
         return $exit;
       }
       else
       {
+        $remote = $this->transport . '://' . $this->host . ':' . $this->port;
+        $context = stream_context_create();
+        $result = stream_context_set_option($context, 'ssl', 'verify_host', true);
+
+        if (!empty($cert_path))
+        {
+          $result = stream_context_set_option($context, 'ssl', 'cafile', $cert_path);
+          $result = stream_context_set_option($context, 'ssl', 'verify_peer', true);
+        }
+        else
+        {
+          $result = stream_context_set_option($context, 'ssl', 'allow_self_signed', true);
+        }
+
+        if ($this->proxy) {
+          $result = stream_context_set_option($context, 'http', 'proxy', $this->proxy);
+        }
+
         $fp = stream_socket_client($remote, $err, $errstr, 10, STREAM_CLIENT_CONNECT, $context);
 
         if ($fp)
         {
           $req = '';
-          $req .= "POST $path HTTP/1.1\r\n";
-          $req .= "Host: $host\r\n";
+          $req .= "POST $this->path HTTP/1.1\r\n";
+          $req .= "Host: $this->host\r\n";
           $req .= "X-ApiKey: " . $this->apiKey . "\r\n";
           $req .= 'Content-length: ' . strlen($data_to_send) . "\r\n";
           $req .= "Content-type: application/json\r\n";
@@ -261,7 +387,7 @@ namespace Raygun4php {
           fwrite($fp, $data_to_send);
 
           $response = "";
-          if ($this->debugSending)
+          if ($this->debug)
           {
             while(!preg_match("/^HTTP\/[\d\.]* (\d{3})/", $response))
             {
@@ -281,13 +407,135 @@ namespace Raygun4php {
         }
         else
         {
-          $errMsg = "<br/><br/>" . "<strong>Raygun Warning:</strong> Couldn't send asynchronously. ";
-          $errMsg .= "Try calling new RaygunClient('apikey', FALSE); to use an alternate sending method, or RaygunClient('key', FALSE, TRUE) to echo the HTTP response" . "<br/><br/>";
-          echo $errMsg;
+          if($this->debug) {
+            $errMsg = "<br/><br/>" . "<strong>Raygun Warning:</strong> Couldn't send error. ";
+            $errMsg .= "Error number: " . $errno . "<br/><br/>";
+            $errMsg .= "Error string: " . $errstr . "<br/><br/>";
+            echo $errMsg;
+          }
           trigger_error('httpPost error: ' . $errstr);
           return null;
         }
       }
+    }
+
+    function toJsonRemoveUnicodeSequences($struct) {
+      return preg_replace_callback("/\\\\u([a-f0-9]{4})/", function($matches){ return iconv('UCS-4LE','UTF-8',pack('V', hexdec("U$matches[1]"))); }, json_encode($struct));
+    }
+
+    function removeNullBytes($string) {
+      return str_replace("\0", '', $string);
+    }
+
+    /**
+     * Optionally applies a value transformation to every matching key, as defined by {@link FilterParams}.
+     * Replaces the value by default, but also supports custom transformations through
+     * anonymous functions. Applies to form data, environment data, HTTP headers.
+     * Does not apply to GET parameters in the request URI.
+     * Filters out raw HTTP data in case any filters are defined, since we can't accurately filter it.
+     *
+     * @param RaygunMessage $message
+     * @param  string $replace Value to be inserted by default (unless specified otherwise by custom transformations).
+     * @return RaygunMessage
+     */
+    function filterParamsFromMessage($message, $replace = '[filtered]') {
+      $filterParams = $this->getFilterParams();
+
+      // Skip checks if none are defined
+      if(!$filterParams) {
+        return $message;
+      }
+
+      // Ensure all filters are callable
+      foreach($filterParams as $filterKey => $filterFn) {
+        if(!is_callable($filterFn)) {
+          $filterParams[$filterKey] = function($key, $val) use ($replace) {return $replace;};
+        }
+      }
+
+      $walkFn = function(&$val, $key) use ($filterParams) {
+        foreach($filterParams as $filterKey => $filterFn) {
+          if(
+            (strpos($filterKey, '/') === 0 && preg_match($filterKey, $key))
+            || (strpos($filterKey, '/') === FALSE && strtolower($filterKey) == strtolower($key))
+          ) {
+            $val = $filterFn($key, $val);
+          }
+        }
+      };
+
+      if($message->Details->Request->Form) {
+        array_walk_recursive($message->Details->Request->Form, $walkFn);
+      }
+
+      if($message->Details->Request->Headers) {
+        array_walk_recursive($message->Details->Request->Headers, $walkFn);
+      }
+
+      if($message->Details->Request->Data) {
+        array_walk_recursive($message->Details->Request->Data, $walkFn);
+      }
+
+      if($message->Details->UserCustomData) {
+        array_walk_recursive($message->Details->UserCustomData, $walkFn);
+      }
+
+      // Unset raw HTTP data since we can't accurately filter it
+      if($message->Details->Request->RawData) {
+        $message->Details->Request->RawData = null;
+      }
+
+      return $message;
+    }
+
+    /**
+     * @param Array $params
+     * @return Raygun4php\RaygunClient
+     */
+    function setFilterParams($params) {
+      $this->filterParams = $params;
+      return $this;
+    }
+
+    /**
+     * @return Array
+     */
+    function getFilterParams() {
+      return $this->filterParams;
+    }
+
+    /**
+     * Use a proxy for sending HTTP requests to Raygun.
+     *
+     * @param String $url URL including protocol and an optional port, e.g. http://myproxy:8080
+     * @return Raygun4php\RaygunClient
+     */
+    function setProxy($proxy) {
+      $this->proxy = $proxy;
+      return $this;
+    }
+
+    /**
+     * Sets the given cookie options
+     *
+     * Existing values will be overridden. Values that are missing from the array being set will keep their current
+     * values.
+     *
+     * The key names match the argument names on setcookie() (e.g. 'expire' or 'path'). Pass the default value according
+     * to PHP's setcookie() function to ignore that parameter.
+     *
+     * @param array<string,mixed> $options
+     */
+    public function SetCookieOptions($options)
+    {
+      $this->cookieOptions = array_merge($this->cookieOptions, $options);
+    }
+
+    /**
+     * @return String
+     */
+    function getProxy() {
+      return $this->proxy;
     }
 
     public function __destruct()
@@ -297,5 +545,6 @@ namespace Raygun4php {
         curl_close($this->httpData);
       }
     }
+
   }
 }
