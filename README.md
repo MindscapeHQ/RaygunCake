@@ -1,7 +1,7 @@
-CakePHP 2.x [Raygun.io](http://raygun.io) Plugin
+CakePHP 2.x [Raygun.com](http://raygun.com) Plugin
 ============
 
-A CakePHP plugin to use [Raygun.io](http://raygun.io) for errors and exceptions. Required PHP 5.3+ (due to Raygun4php dependency)
+A CakePHP plugin to use [Raygun.com](http://raygun.com) for errors and exceptions. Required PHP 5.3+ (due to Raygun4php dependency)
 
 
 Based on https://github.com/morrislaptop/AirbrakeCake
@@ -13,7 +13,7 @@ Based on https://github.com/morrislaptop/AirbrakeCake
 Installation
 =========================
 ```
-git submodule add git://github.com/t1mmen/RaygunCake.git app/Plugin/RaygunCake
+git submodule add git://github.com/MindscapeHQ/RaygunCake.git app/Plugin/RaygunCake
 cd app/Plugin/RaygunCake
 git submodule init
 git submodule update
