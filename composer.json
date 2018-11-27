@@ -1,8 +1,8 @@
 {
-    "name": "t1mmen/RaygunCake",
+    "name": "MindscapeHQ/RaygunCake",
     "description": "A CakePHP 2.x plugin for sending errors and exceptions to the Raygun.io service",
     "keywords": ["raygun", "errors", "exceptions", "logging", "cakephp"],
-    "homepage": "https://github.com/t1mmen/RaygunCake",
+    "homepage": "https://github.com/MindscapeHQ/RaygunCake",
     "license": "MIT",
     "authors": [
         {
