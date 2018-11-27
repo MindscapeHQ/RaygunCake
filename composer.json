@@ -1,5 +1,5 @@
 {
-    "name": "MindscapeHQ/RaygunCake",
+    "name": "mindscapehq/raygun-cake",
     "description": "A CakePHP 2.x plugin for sending errors and exceptions to the Raygun.io service",
     "keywords": ["raygun", "errors", "exceptions", "logging", "cakephp"],
     "homepage": "https://github.com/MindscapeHQ/RaygunCake",
