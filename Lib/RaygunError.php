@@ -2,8 +2,8 @@
 /**
  * Send along errors and exceptions to Raygun.io
  *
- * @link        http://raygun.ui
- * @link        https://github.com/t1mmen/RaygunCake
+ * @link        http://raygun.com
+ * @link        https://github.com/MindscapeHQ/RaygunCake
  * @author 	Timm Stokke <timm@stokke.me>
  */
 
